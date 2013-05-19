@@ -28,6 +28,9 @@
  */
 
 
+//LAST STABLE: 02
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -102,6 +105,14 @@ int bytes=2;
 char wavheader[44];
 int flo_start=0;
 
+//typedef struct {} entry_t;
+struct entry_t
+{
+	
+	struct entry_t *next;
+};
+
+typedef struct entry_t entry_t;
 
 void u16cpy(char *dest, int src)
 {
@@ -167,11 +178,12 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 	
 	switch(state) //TODO: statt segfault tainted setzen und im letzten bufferteil loopen
 	{
-		case 0: // warte auf freigabe
+		case 0: // warte auf freigabe und initialisiere
 			if (flo_start)
 			{
 				state=1;
 				rbpos=0;
+				recentry=firstentry;
 				printf("messe stille\n");
 			}
 			break;
@@ -190,12 +202,11 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			}
 			break;
 		
-		case 2: // spiele note
-		//TODO: hole nächsten eintrag
+		case 2: // spiele note, wie in recentry beschrieben
 			printf("NOTE ON\n");
-			data[0]=MIDI_NOTE_ON;
-			data[1]=note; //TODO
-			data[2]=laut; //TODO
+			data[0]=MIDI_NOTE_ON; //TODO
+			data[1]=note; 
+			data[2]=laut; 
 			if (jack_midi_event_write(midipb, 0, data, 3))
 				fprintf(stderr,"Note loss when writing\n");
 			frame_cnt=notelen; //TODO
@@ -211,10 +222,10 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			{
 				if (frame_cnt < nframes) //noteoff in diesem frame?
 				{
-					printf("NOTE OFF in %i\n",frame_cnt);
+					printf("NOTE OFF in %i\n",frame_cnt); //TODO
 					data[0]=MIDI_NOTE_OFF;
-					data[1]=note; //TODO
-					data[2]=laut; //TODO
+					data[1]=note; 
+					data[2]=laut; 
 
 					if (jack_midi_event_write(midipb, frame_cnt, data, 3))
 						fprintf(stderr,"Note loss when writing\n");
@@ -269,11 +280,22 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				}
 				workend=recend; //TODO evtl noch mehr?
 				main_rbpos=rbpos;
+				workentry=recentry;
 				
 				main_working=1; //befehl zum starten geben
 				
-				frame_cnt=WAIT_AFTER;
-				state=5;
+				
+				recentry=recentry->next;
+				if (recentry==NULL) //fertig?
+				{
+					all_done=1;
+					state=99;
+				}
+				else
+				{
+					frame_cnt=WAIT_AFTER;
+					state=5;
+				}
 			}
 			break;
 		
@@ -285,7 +307,9 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				printf ("fertig mit warten\n");
 				state=2;
 			}
-			
+			break;
+		
+		case 99: //nichts tun, main wird alles fertig machen, aufräumen und beenden.
 			break;
 	}
 	
