@@ -105,7 +105,7 @@ int		channel = 9;
 #define QUIET_LEN 441
 #define WAIT_AFTER 22050
 #define MAX_NOTES 10
-#define DEFAULT_LEN 10 //TODO richtigen wert finden!
+#define DEFAULT_LEN 1000 //TODO richtigen wert finden!
 
 jack_default_audio_sample_t buf1[RECBUF_LEN], buf2[RECBUF_LEN];
 jack_default_audio_sample_t *recbuf, *workbuf;
@@ -326,7 +326,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			break;
 		
 		case 2: // spiele note, wie in recentry beschrieben
-//			printf("NOTE ON\n");
+			printf("NOTE ON\n");
 			//TODO ggf noch bank select?
 			
 			data[0]=MIDI_PROGRAM_CHANGE;
@@ -356,7 +356,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			{
 				if (frame_cnt < nframes) //noteoff in diesem frame?
 				{
-//					printf("NOTE OFF in %i\n",frame_cnt);
+					printf("NOTE OFF in %i\n",frame_cnt);
 
 					data[0]=MIDI_NOTE_OFF;
 					data[2]=recentry->loud; 
@@ -540,7 +540,7 @@ int main(int argc, char *argv[])
 	while(!feof(f))
 	{
 		fgets(line,sizeof(line),f);
-		for (i=strlen(line)-1;i>=0;i--)
+		for (i=strlen(line)-1;i>=0;i--) //remove trailing spaces
 		{
 			if ((line[i]=='\n') || (line[i]==' ') || (line[i]=='\t'))
 				line[i]=0;
@@ -558,11 +558,53 @@ int main(int argc, char *argv[])
 			i=0;
 			m=getnum(line,&i);
 			while ( ((line[i]==' ') || (line[i]=='\t')) && line[i] ) i++;  //line[i] is letter or NUL
-			printf("%i '%s'\n",m,line+i);
 			asprintf(&patchname[m], "%s", line+i);
 		}
 	}
-exit(1);
+	fclose(f);
+
+
+	f=fopen("groups.txt","r");
+	while(!feof(f))
+	{
+		fgets(line,sizeof(line),f);
+		for (i=strlen(line)-1;i>=0;i--) //remove trailing spaces
+		{
+			if ((line[i]=='\n') || (line[i]==' ') || (line[i]=='\t'))
+				line[i]=0;
+			else
+				break;
+		}
+		
+		char *grptmp;
+		for (i=0;line[i];i++)
+			if ((line[i]=='\n') || (line[i]==' ') || (line[i]=='\t'))
+			{
+				line[i]=0;
+				grptmp=&line[i+1];
+				break;
+			}
+			
+		int grprange[128];
+		m=parserange(line,grprange);
+		if (m<0)
+		{
+			printf("error parsing range, ignoring the line...\n");
+		}
+		else
+		{
+			char *grptmp2;
+			asprintf(&grptmp2, "%s", grptmp);
+			for (i=0;i<m;i++)
+			{
+				dirs[grprange[i]]=grptmp2;
+				printf("dirs[%i]='%s'\n",grprange[i],grptmp2);
+			}
+		}
+	}
+
+	fclose(f);
+
 	
 	f=fopen ("config.txt","r");
 	l=0;
