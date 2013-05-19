@@ -86,16 +86,44 @@ int		channel = 9;
 //FINDMICH
 #define RECBUF_LEN 44100*60
 #define SILENCE_LEN 44100*2
-#define SILENCE_ADD 0.01
-#define QUIET_LEN 44100*1
+#define SILENCE_ADD 0.0001
+#define QUIET_LEN 441
 #define WAIT_AFTER 22050
 
 jack_default_audio_sample_t recbuf[RECBUF_LEN];
-int rbpos;
+int rbpos, recend, recstart;
 jack_default_audio_sample_t silence;
 int note=60, laut=100, notelen=22050;
 
+int samp_rate;
+int bytes=2;
+char wavheader[44];
 int flo_start=0;
+
+
+void u16cpy(char *dest, int src)
+{
+	dest[0]=src%256;
+	dest[1]=src/256;
+}
+
+void s16cpy(char *dest, int src)
+{
+	if (src<0)
+		src=(~(-src))+1;
+
+	u16cpy(dest,src);
+}
+
+void u32cpy(char *dest, long int src)
+{
+	dest[0]=src%256;
+	dest[1]=(src/256)%256;
+	dest[2]=(src/256/256)%256;
+	dest[3]=(src/256/256/256)%256;
+}
+
+
 
 jack_default_audio_sample_t arr_dist (jack_default_audio_sample_t a[], int l)
 {
@@ -171,6 +199,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			frame_cnt=notelen; //TODO
 			
 			rbpos=0;
+			recend=-1; recstart=-1;
 			
 			state=3;
 			break;
@@ -206,14 +235,14 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 //				printf ("%f\n",arr_dist(&recbuf[rbpos-QUIET_LEN],QUIET_LEN));
 				if (arr_dist(&recbuf[rbpos-QUIET_LEN],QUIET_LEN)<=silence) //es wird still...
 				{
-					if (recend!=-1) recend=rbpos-QUIET_LEN;
+					if (recend==-1) recend=rbpos-QUIET_LEN;
 					
 					if (frame_cnt==-1) //ggf aufs noteoff warten
 					{
 						printf ("aufnahme fertig\n"); 
 						frame_cnt=WAIT_AFTER;
-						
-						for (i=1;i<=QUIET_LEN;i++)
+						//TODO von hier abwärts
+						for (i=1;i<=QUIET_LEN;i++) //TODO hier und unten dauerts ewig :/
 							if (arr_dist(recbuf,i) > silence)
 								recstart=i-1;
 
@@ -221,14 +250,14 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 							for (i=QUIET_LEN;i<recend;i++)
 								if (arr_dist(&recbuf[i-QUIET_LEN],QUIET_LEN) > silence)
 									recstart=i-1;
-									
+						//bis hier dauerts ewig. (einige sec) -> in anderen thread verlagern!
 						if (recstart!=-1)
 						{
-							printf("gotcha.\n"); //TODO: speichern
+							printf("gotcha. %i - %i [%i - %i]\n",recstart,recend,0,rbpos); //TODO: speichern
 						}
 						else
 						{
-							printf ("komisch. nur stille aufgenommen...\n"); //TODO handlen!
+							printf ("komisch. nur stille aufgenommen... recend=%i [%i]\n",recend,rbpos); //TODO handlen!
 						}
 						
 						state=4; //fertig mit aufnehmen
@@ -245,8 +274,16 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			
 		case 4: //fertig mit aufnehmen, es ist bereits wieder still; noch einige zeit warten
 			frame_cnt-=nframes;
-			if (frame_cnt<=0)
-			{
+			if (frame_cnt<=0) //zusätzlich noch warten, ob der verarbeitungs-thread
+			{									//mit dem vor-sample schon fertig ist, und dann das
+												//momentane ihm übergeben
+				// if (thread_working==0) //unlocked?
+				// {
+				//   memcpy(sein_buf, unser_buf);
+				//   memcpy(seine_info, unsere_info);
+				//   thread_working=1; //befehl zum anfangen gebeen
+				//   state=2;
+				// }
 				frame_cnt=-1;
 				printf ("fertig mit warten\n");
 				state=2;
