@@ -38,7 +38,7 @@
  * --overwrite-option?
  */
 
-//LAST STABLE: 04
+//LAST STABLE: 07
 
 
 #include <stdio.h>
@@ -106,6 +106,7 @@ int		channel = 9;
 #define WAIT_AFTER 22050
 #define MAX_NOTES 10
 #define DEFAULT_LEN 1000 //TODO richtigen wert finden!
+#define LATENCY 1000
 
 jack_default_audio_sample_t buf1[RECBUF_LEN], buf2[RECBUF_LEN];
 jack_default_audio_sample_t *recbuf, *workbuf;
@@ -280,7 +281,7 @@ jack_default_audio_sample_t arr_dist (jack_default_audio_sample_t a[], int l)
 int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 {
 	static int state = 0;
-	static int frame_cnt;
+	static int frame_cnt, frame_cnt2;
 	static int rbpos=0, recend;
 	int i;
 	void           *midipb;
@@ -326,7 +327,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			break;
 		
 		case 2: // spiele note, wie in recentry beschrieben
-			printf("NOTE ON\n");
+//			printf("NOTE ON\n");
 			//TODO ggf noch bank select?
 			
 			data[0]=MIDI_PROGRAM_CHANGE;
@@ -344,6 +345,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 					fprintf(stderr,"Note loss when writing\n");
 			}
 			frame_cnt=recentry->notelen;
+			frame_cnt2=LATENCY*samp_rate/1000;
 			
 			rbpos=0;
 			recend=-1;
@@ -352,11 +354,16 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			break;
 			
 		case 3: // nehme auf und sende ggf note off
+			if (frame_cnt2 != -1)
+			{
+				frame_cnt2-=nframes;
+				if (frame_cnt2<=0) frame_cnt2=-1;
+			}
 			if (frame_cnt != -1) //ggf note off
 			{
 				if (frame_cnt < nframes) //noteoff in diesem frame?
 				{
-					printf("NOTE OFF in %i\n",frame_cnt);
+//					printf("NOTE OFF in %i\n",frame_cnt);
 
 					data[0]=MIDI_NOTE_OFF;
 					data[2]=recentry->loud; 
@@ -386,7 +393,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				{
 					if (recend==-1) recend=rbpos-QUIET_LEN;
 					
-					if (frame_cnt==-1) //ggf aufs noteoff warten
+					if ((frame_cnt==-1) && (frame_cnt2==-1)) //ggf aufs noteoff warten
 					{
 //						printf ("aufnahme fertig\n"); 
 						
@@ -596,10 +603,7 @@ int main(int argc, char *argv[])
 			char *grptmp2;
 			asprintf(&grptmp2, "%s", grptmp);
 			for (i=0;i<m;i++)
-			{
 				dirs[grprange[i]]=grptmp2;
-				printf("dirs[%i]='%s'\n",grprange[i],grptmp2);
-			}
 		}
 	}
 
@@ -682,7 +686,7 @@ int main(int argc, char *argv[])
 							}
 							break;
 						
-						case 1: //expects octave (-1 or 4)
+						case 1: //expects octave (-2 or 4)
 							if ((param[j]=='-') || ((param[j]>='0') && (param[j]<='9')))
 							{
 //									printf("found octave\n");
@@ -901,7 +905,7 @@ int main(int argc, char *argv[])
 		}
 		else
 		{
-			printf ("main: komisch. nur stille aufgenommen...\n"); //TODO handlen!
+			printf ("ERROR: main: komisch. nur stille aufgenommen bei datei %s...\n",workentry->file); //TODO handlen!
 		}
 		
 		
