@@ -29,17 +29,14 @@
 
 
 /* TODO
- * dateiname finden
- * dirliste lesen
  * bytes aus datei lesen
- * patchnamen lesen
- * dateien namen geben
- * verzeichnisse anlegen (gruppen)
  * --overwrite-option?
+ * zwischen normalem und drum-modus wechseln!
  */
 
-//LAST STABLE: 07
+//LAST STABLE: 08
 
+// #define DRUM_MODE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,7 +332,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			if (jack_midi_event_write(midipb, 0, data, 2))
 				fprintf(stderr,"Note loss when writing\n");
 			
-			data[0]=MIDI_NOTE_ON;
+			data[0]=MIDI_NOTE_ON + (recentry->chan & 0x0F);
 			data[2]=recentry->loud; 
 
 			for (i=0;recentry->note[i]!=-1;i++)
@@ -365,7 +362,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				{
 //					printf("NOTE OFF in %i\n",frame_cnt);
 
-					data[0]=MIDI_NOTE_OFF;
+					data[0]=MIDI_NOTE_OFF + (recentry->chan & 0x0F);
 					data[2]=recentry->loud; 
 					for (i=0;recentry->note[i]!=-1;i++)
 					{
@@ -521,6 +518,8 @@ int main(int argc, char *argv[])
 	int dontignore;
 	int rangelen;
 	
+	int drumprogram;
+	
 	entry_t *curr_entry;
 	
 	
@@ -541,7 +540,6 @@ int main(int argc, char *argv[])
 	char dummy[]="unknown";
 	for (i=0;i<128;i++)
 		dirs[i]=patchname[i]=dummy;
-
 
 	f=fopen("patches.txt","r");
 	while(!feof(f))
@@ -570,7 +568,7 @@ int main(int argc, char *argv[])
 	}
 	fclose(f);
 
-
+#ifndef DRUM_MODE
 	f=fopen("groups.txt","r");
 	while(!feof(f))
 	{
@@ -608,7 +606,7 @@ int main(int argc, char *argv[])
 	}
 
 	fclose(f);
-
+#endif
 	
 	f=fopen ("config.txt","r");
 	l=0;
@@ -644,11 +642,32 @@ int main(int argc, char *argv[])
 				printf ("ERROR: invalid range specified in line %i\n",l);
 				goto invalid;
 			}
-			
+
 			while(1)
 			{
 				for (i=0;(param[i]!=0) && (param[i]!=',') && (param[i]!='\n');i++); //find ','
+
+#ifdef DRUM_MODE
+				for (j=0;(param[j]!=0) && ((param[j]==' ') || (param[j]=='\t'));j++); //find nonspace
+				drumprogram=getnum(param,&j);
+				loud=120; //TODO anderer default?
+				len=75;
+
+				for (;(param[j]!=0) && ((param[j]==' ') || (param[j]=='\t'));j++); //find next nonspace
+				if (isdigit(param[j]))
+				{
+					printf("loud specified\n");
+					loud=getnum(param,&j);
+				}
+				for (;(param[j]!=0) && ((param[j]==' ') || (param[j]=='\t'));j++); //find next nonspace
+				if (isdigit(param[j]))
+				{
+					len=getnum(param,&j);
+					printf("len\n");
+				}
 				
+
+#else //ifndef DRUM_MODE				
 				state=0;
 				len=DEFAULT_LEN;
 				notenum=0;
@@ -730,6 +749,7 @@ int main(int argc, char *argv[])
 					}
 				}
 				
+#endif
 				//in die liste eintragen
 				
 				for (k=0;k<rangelen;k++)
@@ -747,6 +767,7 @@ int main(int argc, char *argv[])
 						
 					tmpptr->loud=loud;
 					tmpptr->notelen=len*samp_rate /1000; //von msec in samples umrechnen
+#ifndef DRUM_MODE
 					tmpptr->chan=0;
 					tmpptr->patch=patchlist[k];
 					tmpptr->dir=dirs[patchlist[k]];
@@ -781,6 +802,21 @@ int main(int argc, char *argv[])
 					for (j=0;j<notenum;j++)
 						tmpptr->note[j]=note[j];
 					tmpptr->note[notenum]=-1;
+#else // ifdef DRUM_MODE
+					tmpptr->chan=9;
+					tmpptr->note[0]=patchlist[k]; tmpptr->note[1]=-1;
+					tmpptr->patch=drumprogram;
+					
+					tmpptr->dir="drums";
+					asprintf(&tmpptr->file, "%s/%03i%s %i %i %ims.wav",tmpptr->dir, tmpptr->note[0],
+					    patchname[tmpptr->note[0]], tmpptr->patch, tmpptr->loud, len);
+					
+					
+					printf("chan=%i, note=%i, patch=%i, loud=%i, len=%i,\n\tdir='%s', file='%s'\n",
+					  tmpptr->chan, tmpptr->note[0], tmpptr->patch, tmpptr->loud, tmpptr->notelen,
+					  tmpptr->dir, tmpptr->file);
+#endif
+
 					tmpptr->next=NULL;
 					
 					curr_entry=tmpptr;
