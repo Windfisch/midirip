@@ -86,14 +86,16 @@ int		channel = 9;
 //FINDMICH
 #define RECBUF_LEN 44100*60
 #define SILENCE_LEN 44100*2
-#define SILENCE_ADD 0.0001
+#define SILENCE_ADD 0.005   //schon ziemlich knapp. lieber weniger
 #define QUIET_LEN 441
 #define WAIT_AFTER 22050
 
-jack_default_audio_sample_t recbuf[RECBUF_LEN];
-int rbpos, recend, recstart;
+jack_default_audio_sample_t buf1[RECBUF_LEN], buf2[RECBUF_LEN];
+jack_default_audio_sample_t *recbuf, *workbuf;
 jack_default_audio_sample_t silence;
 int note=60, laut=100, notelen=22050;
+int main_working, all_done;
+int workstart, workend, main_rbpos;
 
 int samp_rate;
 int bytes=2;
@@ -145,7 +147,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 {
 	static int state = 0;
 	static int frame_cnt;
-	
+	static int rbpos=0, recend;
 	int i;
 	void           *midipb;
 	jack_nframes_t	last_frame_time;
@@ -163,7 +165,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 	jack_midi_clear_buffer(midipb);
 
 	
-	switch(state)
+	switch(state) //TODO: statt segfault tainted setzen und im letzten bufferteil loopen
 	{
 		case 0: // warte auf freigabe
 			if (flo_start)
@@ -199,7 +201,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			frame_cnt=notelen; //TODO
 			
 			rbpos=0;
-			recend=-1; recstart=-1;
+			recend=-1;
 			
 			state=3;
 			break;
@@ -230,9 +232,8 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				recbuf[rbpos]=recpb[i];
 				rbpos++;
 			}
-			if (rbpos>QUIET_LEN)
+			if (rbpos>QUIET_LEN) //TODO FINDMICH: QUIET_LEN mit nframes ersetzen???
 			{
-//				printf ("%f\n",arr_dist(&recbuf[rbpos-QUIET_LEN],QUIET_LEN));
 				if (arr_dist(&recbuf[rbpos-QUIET_LEN],QUIET_LEN)<=silence) //es wird still...
 				{
 					if (recend==-1) recend=rbpos-QUIET_LEN;
@@ -240,50 +241,46 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 					if (frame_cnt==-1) //ggf aufs noteoff warten
 					{
 						printf ("aufnahme fertig\n"); 
-						frame_cnt=WAIT_AFTER;
-						//TODO von hier abwärts
-						for (i=1;i<=QUIET_LEN;i++) //TODO hier und unten dauerts ewig :/
-							if (arr_dist(recbuf,i) > silence)
-								recstart=i-1;
-
-						if (recstart==-1)
-							for (i=QUIET_LEN;i<recend;i++)
-								if (arr_dist(&recbuf[i-QUIET_LEN],QUIET_LEN) > silence)
-									recstart=i-1;
-						//bis hier dauerts ewig. (einige sec) -> in anderen thread verlagern!
-						if (recstart!=-1)
-						{
-							printf("gotcha. %i - %i [%i - %i]\n",recstart,recend,0,rbpos); //TODO: speichern
-						}
-						else
-						{
-							printf ("komisch. nur stille aufgenommen... recend=%i [%i]\n",recend,rbpos); //TODO handlen!
-						}
 						
-						state=4; //fertig mit aufnehmen
+						state=4;
 					}
 				}
-				else //nicht (mehr?) still?
+				else //nicht (mehr?) still
 				{
 					if (recend!=-1)
-						printf("komisch... erst still, dann laut?\n");
+						printf("komisch... erst still, dann laut? %i\n",rbpos);
 					recend=-1;
 				}
 			}
 			break;
-			
-		case 4: //fertig mit aufnehmen, es ist bereits wieder still; noch einige zeit warten
+		
+		case 4: //auf verarbeitungs-thread warten
+			if (main_working==0) //main ist fertig?
+			{
+				if (recbuf==buf1) //buffer wechseln
+				{
+					recbuf=buf2;
+					workbuf=buf1;
+				}
+				else
+				{
+					recbuf=buf1;
+					workbuf=buf2;
+				}
+				workend=recend; //TODO evtl noch mehr?
+				main_rbpos=rbpos;
+				
+				main_working=1; //befehl zum starten geben
+				
+				frame_cnt=WAIT_AFTER;
+				state=5;
+			}
+			break;
+		
+		case 5: //noch einige zeit warten
 			frame_cnt-=nframes;
-			if (frame_cnt<=0) //zusätzlich noch warten, ob der verarbeitungs-thread
-			{									//mit dem vor-sample schon fertig ist, und dann das
-												//momentane ihm übergeben
-				// if (thread_working==0) //unlocked?
-				// {
-				//   memcpy(sein_buf, unser_buf);
-				//   memcpy(seine_info, unsere_info);
-				//   thread_working=1; //befehl zum anfangen gebeen
-				//   state=2;
-				// }
+			if (frame_cnt<=0)
+			{									
 				frame_cnt=-1;
 				printf ("fertig mit warten\n");
 				state=2;
@@ -343,6 +340,15 @@ void init_jack(void) //WICHTIG !!!
 
 int main(int argc, char *argv[])
 {
+	int i;
+	
+	//init
+	recbuf=buf1; workbuf=buf2;
+	main_working=0; all_done=0;
+
+	
+	samp_rate=44100; bytes=2;
+	
 	//init header
 	strcpy(wavheader+ 0, "RIFF");
 	//u32cpy(wavheader+ 4, filelen-8);
@@ -361,16 +367,90 @@ int main(int argc, char *argv[])
 	//u32cpy(wavheader+40, datalen);
 
 	
-	
-	
-	rbpos=0;
 	init_jack();
 	
 	char foo[10]; gets(foo);
 	
 	flo_start=1;
 	
-	gets(foo);
+	main_working=0;
+	printf("main: entering loop\n");
+	while(1)
+	{
+		while ((main_working==0) && (all_done==0)) usleep(100000); // 0.1 sec
+		//TODO: all_done auswerten
+		printf("main: starting work cycle\n");
+		
+		workstart=-1;
+		for (i=1;i<=QUIET_LEN;i++) //Find begin of non-silence
+			if (arr_dist(workbuf,i) > silence)
+			{
+				workstart=i-1;
+				break;
+			}
+
+		if (workstart==-1) // [ continued ] 
+			for (i=QUIET_LEN;i<workend;i++)
+				if (arr_dist(&workbuf[i-QUIET_LEN],QUIET_LEN) > silence)
+				{
+					workstart=i-1;
+					break;
+				}
+
+		if (workstart!=-1)
+		{
+			printf("main: gotcha. %i - %i [%i - %i]\n",workstart,workend,0,main_rbpos);
+			jack_default_audio_sample_t max=0.0; //find max amplitude
+			for (i=workstart; i<=workend; i++)
+			{
+				if (workbuf[i]>0)
+				{
+					if (workbuf[i]>max) max=workbuf[i];
+				}
+				else
+				{
+					if (-workbuf[i]>max) max=-workbuf[i];
+				}
+			}
+		
+			int datalen,filelen;
+			datalen=(workend-workstart+1)*bytes;
+			filelen=44+datalen;
+			u32cpy(wavheader+ 4, filelen-8);
+			u32cpy(wavheader+40, datalen);
+			
+			FILE* f;
+			f=fopen("flo1.wav","w");
+			
+			unsigned char tmp[2];
+			
+			fwrite(wavheader, 1, 44, f);
+			if (bytes==1)
+				for (i=workstart;i<=workend;i++)
+				{
+					*tmp=(workbuf[i]/max*127.0)+127;
+					fwrite(tmp,1,1,f);
+				}
+			else
+				for (i=workstart;i<=workend;i++)
+				{
+					s16cpy(tmp, (long)(workbuf[i]/max*32767.0));
+					fwrite(&tmp,1,2,f);
+				}
+						
+			fclose(f);
+						
+			
+		}
+		else
+		{
+			printf ("main: komisch. nur stille aufgenommen...\n"); //TODO handlen!
+		}
+		
+		
+		printf("main: work done\n");
+		main_working=0;
+	}
 
 	return 0;
 }
