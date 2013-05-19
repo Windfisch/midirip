@@ -28,12 +28,24 @@
  */
 
 
-//LAST STABLE: 02
+/* TODO
+ * dateiname finden
+ * dirliste lesen
+ * bytes aus datei lesen
+ * patchnamen lesen
+ * dateien namen geben
+ * verzeichnisse anlegen (gruppen)
+ * --overwrite-option?
+ */
+
+//LAST STABLE: 04
 
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <assert.h>
@@ -105,7 +117,7 @@ int workstart, workend, main_rbpos;
 int samp_rate;
 int bytes=2;
 char wavheader[44];
-int flo_start=0;
+int flo_start;
 
 struct entry_t
 {
@@ -116,6 +128,8 @@ struct entry_t
 	char note[MAX_NOTES];
 	int notelen;
 	
+	char *file, *dir;
+	
 	struct entry_t *next;
 };
 typedef struct entry_t entry_t;
@@ -123,6 +137,10 @@ typedef struct entry_t entry_t;
 entry_t *recentry, *workentry, *firstentry;
 
 const int notemap[7]={33,35,24,26,28,29,31};
+
+char *dirs[128];
+char *patchname[128];
+
 
 int getnum(char *s, int *i)
 {
@@ -281,7 +299,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 	jack_midi_clear_buffer(midipb);
 
 	
-	switch(state) //TODO: statt segfault tainted setzen und im letzten bufferteil loopen
+	switch(state) 
 	{
 		case 0: // warte auf freigabe und initialisiere
 			if (flo_start)
@@ -309,12 +327,23 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 		
 		case 2: // spiele note, wie in recentry beschrieben
 			printf("NOTE ON\n");
-			data[0]=MIDI_NOTE_ON; //TODO
-			data[1]=note; 
-			data[2]=laut; 
-			if (jack_midi_event_write(midipb, 0, data, 3))
+			//TODO ggf noch bank select?
+			
+			data[0]=MIDI_PROGRAM_CHANGE;
+			data[1]=recentry->patch;
+			if (jack_midi_event_write(midipb, 0, data, 2))
 				fprintf(stderr,"Note loss when writing\n");
-			frame_cnt=notelen; //TODO
+			
+			data[0]=MIDI_NOTE_ON;
+			data[2]=recentry->loud; 
+
+			for (i=0;recentry->note[i]!=-1;i++)
+			{
+				data[1]=recentry->note[i]; 
+				if (jack_midi_event_write(midipb, 0, data, 3))
+					fprintf(stderr,"Note loss when writing\n");
+			}
+			frame_cnt=recentry->notelen;
 			
 			rbpos=0;
 			recend=-1;
@@ -327,13 +356,16 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			{
 				if (frame_cnt < nframes) //noteoff in diesem frame?
 				{
-					printf("NOTE OFF in %i\n",frame_cnt); //TODO
-					data[0]=MIDI_NOTE_OFF;
-					data[1]=note; 
-					data[2]=laut; 
+					printf("NOTE OFF in %i\n",frame_cnt);
 
-					if (jack_midi_event_write(midipb, frame_cnt, data, 3))
-						fprintf(stderr,"Note loss when writing\n");
+					data[0]=MIDI_NOTE_OFF;
+					data[2]=recentry->loud; 
+					for (i=0;recentry->note[i]!=-1;i++)
+					{
+						data[1]=recentry->note[i]; 
+						if (jack_midi_event_write(midipb, frame_cnt, data, 3))
+							fprintf(stderr,"Note loss when writing\n");
+					}
 					
 					frame_cnt=-1;
 				}
@@ -344,7 +376,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			for (i=0;i<nframes;i++) //aufnehmen
 			{
 				if (rbpos>=RECBUF_LEN)
-					printf("WARNING: segfault\n"); //TODO
+					printf("WARNING: segfault\n"); //TODO: statt segfault tainted setzen und im letzten bufferteil loopen
 				recbuf[rbpos]=recpb[i];
 				rbpos++;
 			}
@@ -383,7 +415,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 					recbuf=buf1;
 					workbuf=buf2;
 				}
-				workend=recend; //TODO evtl noch mehr?
+				workend=recend;
 				main_rbpos=rbpos;
 				workentry=recentry;
 				
@@ -393,6 +425,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 				recentry=recentry->next;
 				if (recentry==NULL) //fertig?
 				{
+					printf("all done, waiting for main to finish and clean up\n");
 					all_done=1;
 					state=99;
 				}
@@ -460,6 +493,8 @@ void init_jack(void) //WICHTIG !!!
 		exit(1);
 	}
 
+	samp_rate=jack_get_sample_rate(jack_client);
+
 	if (jack_activate(jack_client)) 
 	{
 		fprintf(stderr,"Activating client failed.\n");
@@ -469,7 +504,7 @@ void init_jack(void) //WICHTIG !!!
 
 int main(int argc, char *argv[])
 {
-	int i,l;
+	int i,j,k,l;
 	FILE* f;
 	char line[1000];
 	char *range, *param;
@@ -477,17 +512,40 @@ int main(int argc, char *argv[])
 	
 	int oct,loud,len;
 	int notenum, note[10];
-	int j,k;
 	int state;
 	int dontignore;
 	int rangelen;
 	
 	entry_t *curr_entry;
 	
-	curr_entry=firstentry=NULL;
+	
+	//TODO nettes CLI
+	
+	
+	bytes=2;	
+
+	//init
+	recbuf=buf1; workbuf=buf2;
+	main_working=0; all_done=0;
+	flo_start=0;
+
+	init_jack();
+
+
+//TODO patchname und dirs initialisieren FINDMICH
+	char rofl[]="somedir";
+	char mao[]="somename";
+	for (i=0;i<128;i++)
+	{
+		dirs[i]=rofl;
+		patchname[i]=mao;
+	}
+
+
 	
 	f=fopen ("config.txt","r");
 	l=0;
+	curr_entry=firstentry=NULL;
 	while(!feof(f))
 	{
 		fgets(line,sizeof(line),f);
@@ -606,6 +664,7 @@ int main(int argc, char *argv[])
 				}
 				
 				//in die liste eintragen
+				
 				for (k=0;k<rangelen;k++)
 				{
 					entry_t *tmpptr=malloc(sizeof(entry_t));
@@ -623,6 +682,31 @@ int main(int argc, char *argv[])
 					tmpptr->notelen=len*samp_rate /1000; //von msec in samples umrechnen
 					tmpptr->chan=0;
 					tmpptr->patch=patchlist[k];
+					tmpptr->dir=dirs[patchlist[k]];
+
+					char ntmp[100]; //trim multiple, leading and trailing spaces from param
+					int supp_spc=1;
+					j=0;
+					for (i=0;(param[i]!=0) && (param[i]!=',') && (param[i]!='\n');i++)
+					{
+						if ((param[i]==' ') || (param[i]=='\t'))
+						{
+							if (!supp_spc)
+								ntmp[j++]=' ';
+							supp_spc=1;
+						}
+						else
+						{
+							supp_spc=0;
+							ntmp[j++]=param[i];
+						}
+					}
+					ntmp[j]=0;
+					if (ntmp[j-1]==' ') ntmp[j-1]=0;
+					
+					asprintf(&tmpptr->file, "%s/%03i%s %s %03i %ims.wav",tmpptr->dir, tmpptr->patch,
+					    patchname[tmpptr->patch], ntmp, tmpptr->loud, len);
+					
 					
 					for (j=0;j<notenum;j++)
 						tmpptr->note[j]=note[j];
@@ -640,29 +724,14 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	curr_entry=firstentry;
-	while(curr_entry)
-	{
-		printf("%i\n",curr_entry->loud);
-		
-		curr_entry=curr_entry->next;
-	}
 	
 	
 	
-	
-	//init
-	recbuf=buf1; workbuf=buf2;
-	main_working=0; all_done=0;
 
-	
-	samp_rate=44100; bytes=2;
 	
 	//init header
 	strcpy(wavheader+ 0, "RIFF");
-	//u32cpy(wavheader+ 4, filelen-8);
 	strcpy(wavheader+ 8, "WAVE");
-	
 	strcpy(wavheader+12, "fmt ");
 	u32cpy(wavheader+16, 16);
 	u16cpy(wavheader+20, 1);
@@ -671,13 +740,13 @@ int main(int argc, char *argv[])
 	u32cpy(wavheader+28, samp_rate*bytes);
 	u16cpy(wavheader+32, bytes);
 	u16cpy(wavheader+34, bytes*8);
-	
 	strcpy(wavheader+36, "data");
-	//u32cpy(wavheader+40, datalen);
 
 	
-	init_jack();
 	
+	
+	printf("connect ripmidi's midi port to some MIDI OUT and the audio\n"
+	       "port to the corresponding audio input port; then press enter\n");
 	char foo[10]; gets(foo);
 	
 	flo_start=1;
@@ -687,7 +756,8 @@ int main(int argc, char *argv[])
 	while(1)
 	{
 		while ((main_working==0) && (all_done==0)) usleep(100000); // 0.1 sec
-		//TODO: all_done auswerten
+		if (all_done) break;
+
 		printf("main: starting work cycle\n");
 		
 		workstart=-1;
@@ -708,7 +778,7 @@ int main(int argc, char *argv[])
 
 		if (workstart!=-1)
 		{
-			printf("main: gotcha. %i - %i [%i - %i]\n",workstart,workend,0,main_rbpos);
+//			printf("main: gotcha. %i - %i [%i - %i]\n",workstart,workend,0,main_rbpos);
 			jack_default_audio_sample_t max=0.0; //find max amplitude
 			for (i=workstart; i<=workend; i++)
 			{
@@ -729,25 +799,38 @@ int main(int argc, char *argv[])
 			u32cpy(wavheader+40, datalen);
 			
 
-			f=fopen("flo1.wav","w");
+			int ret=mkdir(workentry->dir,S_IRWXU|S_IRWXG|S_IRWXO);
+			if ((ret==-1) && (errno!=EEXIST)) //a real error occurred
+			{
+				fprintf(stderr,"ERROR: could not create %s (%s)\n",workentry->dir,strerror(errno));
+			}
 			
-			unsigned char tmp[2];
-			
-			fwrite(wavheader, 1, 44, f);
-			if (bytes==1)
-				for (i=workstart;i<=workend;i++)
-				{
-					*tmp=(workbuf[i]/max*127.0)+127;
-					fwrite(tmp,1,1,f);
-				}
+			f=fopen(workentry->file,"w");
+			if (f==NULL)
+			{
+				fprintf(stderr,"ERROR: could not open %s (%s)\n",workentry->file,strerror(errno));
+			}
 			else
-				for (i=workstart;i<=workend;i++)
-				{
-					s16cpy(tmp, (long)(workbuf[i]/max*32767.0));
-					fwrite(&tmp,1,2,f);
-				}
-						
-			fclose(f);
+			{
+				printf("writing to file %s\n",workentry->file);
+				unsigned char tmp[2];
+				
+				fwrite(wavheader, 1, 44, f);
+				if (bytes==1)
+					for (i=workstart;i<=workend;i++)
+					{
+						*tmp=(workbuf[i]/max*127.0)+127;
+						fwrite(tmp,1,1,f);
+					}
+				else
+					for (i=workstart;i<=workend;i++)
+					{
+						s16cpy(tmp, (long)(workbuf[i]/max*32767.0));
+						fwrite(&tmp,1,2,f);
+					}
+							
+				fclose(f);
+			}
 						
 			
 		}
@@ -761,6 +844,7 @@ int main(int argc, char *argv[])
 		main_working=0;
 	}
 
+	printf("\n=== ALL DONE ===\n[exiting...]\n\n");
 	return 0;
 	
 	
