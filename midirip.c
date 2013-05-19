@@ -326,7 +326,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			break;
 		
 		case 2: // spiele note, wie in recentry beschrieben
-			printf("NOTE ON\n");
+//			printf("NOTE ON\n");
 			//TODO ggf noch bank select?
 			
 			data[0]=MIDI_PROGRAM_CHANGE;
@@ -356,7 +356,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			{
 				if (frame_cnt < nframes) //noteoff in diesem frame?
 				{
-					printf("NOTE OFF in %i\n",frame_cnt);
+//					printf("NOTE OFF in %i\n",frame_cnt);
 
 					data[0]=MIDI_NOTE_OFF;
 					data[2]=recentry->loud; 
@@ -388,15 +388,13 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 					
 					if (frame_cnt==-1) //ggf aufs noteoff warten
 					{
-						printf ("aufnahme fertig\n"); 
+//						printf ("aufnahme fertig\n"); 
 						
 						state=4;
 					}
 				}
 				else //nicht (mehr?) still
 				{
-					if (recend!=-1)
-						printf("komisch... erst still, dann laut? %i\n",rbpos);
 					recend=-1;
 				}
 			}
@@ -442,7 +440,7 @@ int process_callback(jack_nframes_t nframes, void *notused) //WICHTIG FINDMICH
 			if (frame_cnt<=0)
 			{									
 				frame_cnt=-1;
-				printf ("fertig mit warten\n");
+//				printf ("fertig mit warten\n");
 				state=2;
 			}
 			break;
@@ -504,7 +502,7 @@ void init_jack(void) //WICHTIG !!!
 
 int main(int argc, char *argv[])
 {
-	int i,j,k,l;
+	int i,j,k,l,m;
 	FILE* f;
 	char line[1000];
 	char *range, *param;
@@ -533,15 +531,38 @@ int main(int argc, char *argv[])
 
 
 //TODO patchname und dirs initialisieren FINDMICH
-	char rofl[]="somedir";
-	char mao[]="somename";
+	char dummy[]="unknown";
 	for (i=0;i<128;i++)
+		dirs[i]=patchname[i]=dummy;
+
+
+	f=fopen("patches.txt","r");
+	while(!feof(f))
 	{
-		dirs[i]=rofl;
-		patchname[i]=mao;
+		fgets(line,sizeof(line),f);
+		for (i=strlen(line)-1;i>=0;i--)
+		{
+			if ((line[i]=='\n') || (line[i]==' ') || (line[i]=='\t'))
+				line[i]=0;
+			else
+				break;
+		}
+		
+
+		if (!isdigit(line[0]))
+		{
+			fprintf(stderr,"invalid number in patchlist, ignoring it...\n");
+		}
+		else
+		{
+			i=0;
+			m=getnum(line,&i);
+			while ( ((line[i]==' ') || (line[i]=='\t')) && line[i] ) i++;  //line[i] is letter or NUL
+			printf("%i '%s'\n",m,line+i);
+			asprintf(&patchname[m], "%s", line+i);
+		}
 	}
-
-
+exit(1);
 	
 	f=fopen ("config.txt","r");
 	l=0;
@@ -687,9 +708,12 @@ int main(int argc, char *argv[])
 					char ntmp[100]; //trim multiple, leading and trailing spaces from param
 					int supp_spc=1;
 					j=0;
-					for (i=0;(param[i]!=0) && (param[i]!=',') && (param[i]!='\n');i++)
-					{
-						if ((param[i]==' ') || (param[i]=='\t'))
+					for (m=0;(param[m]!=0) && (param[m]!=',') && (param[m]!='\n');m++)
+					{ //if there will begin a new parameter, and there's not space or a note
+						if ( !(((param[m]>='a') && (param[m]<='g')) || 
+						       (param[m]==' ') || (param[m]=='\t') )     && supp_spc) break;
+
+						if ((param[m]==' ') || (param[m]=='\t'))
 						{
 							if (!supp_spc)
 								ntmp[j++]=' ';
@@ -698,7 +722,7 @@ int main(int argc, char *argv[])
 						else
 						{
 							supp_spc=0;
-							ntmp[j++]=param[i];
+							ntmp[j++]=param[m];
 						}
 					}
 					ntmp[j]=0;
@@ -756,7 +780,6 @@ int main(int argc, char *argv[])
 	while(1)
 	{
 		while ((main_working==0) && (all_done==0)) usleep(100000); // 0.1 sec
-		if (all_done) break;
 
 		printf("main: starting work cycle\n");
 		
@@ -842,6 +865,8 @@ int main(int argc, char *argv[])
 		
 		printf("main: work done\n");
 		main_working=0;
+		
+		if (all_done) break;
 	}
 
 	printf("\n=== ALL DONE ===\n[exiting...]\n\n");
