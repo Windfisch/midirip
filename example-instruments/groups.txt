@@ -1,0 +1,17 @@
+0-7 00Piano
+8-15 01Chromatic
+16-23 02Organ
+24-31 03Guitar
+32-39 04Bass
+40-47 05Strings
+48-55 06Ensemble
+56-63 07Brass
+64-71 08Reed
+72-79 09Pipe
+80-87 10SynLead
+88-95 11SynPad
+96-103 12SynFX
+104-111 13Ethnic
+112-119 14Perc
+120-127 15FX
+ 

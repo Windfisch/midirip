@@ -1,0 +1,13 @@
+this program can be used to rip your synthesizer's sound:
+it plays configured notes and records the result.
+
+have a look at the files under example-drums and example-instruments
+for the syntax
+
+for switching between instrument and drum mode, you must edit
+midirip.c and set/unset the #define DRUM_MODE!
+
+Disclaimer: this program has been written in a great hurry,
+            within less than ~5 hours of pure coding!
+	    Expect appropriate buggyness.
+
